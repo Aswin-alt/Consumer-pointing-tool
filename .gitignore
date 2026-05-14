@@ -1,0 +1,16 @@
+# Credentials — never commit
+MicrozToolProperties/.ssh_pass
+MicrozToolProperties/.vault_pass
+MicrozToolProperties/admin.properties
+
+# Build artifacts
+*.war
+*.class
+MicrozConsumerTool/WEB-INF/classes/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Logs
+/tmp/
