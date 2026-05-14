@@ -13,13 +13,11 @@ import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import javax.servlet.ServletException;
-import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
-@WebServlet(value = {"/MicrozConsumerServlet"})
 public class MicrozConsumerServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
     private static final String LOG_DIR = "/tmp/microz_logs";

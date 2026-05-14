@@ -19,8 +19,8 @@ public class MicrozChangeUtil {
             + "<option value=\"\">Select app server</option>";
         if (prop != null) {
             for (Object appServerName : prop.keySet()) {
-            String safeName = escapeHtml(appServerName.toString());
-            html += "<option value=\"" + safeName + "\">" + safeName + "</option>";
+                String safeName = escapeHtml(appServerName.toString());
+                html += "<option value=\"" + safeName + "\">" + safeName + "</option>";
             }
         }
         html += "</select></div>";
@@ -29,8 +29,8 @@ public class MicrozChangeUtil {
             + "<select id=\"ConsumerName\" name=\"ConsumerName\" multiple=\"multiple\">";
         if (consumerprop != null) {
             for (Object consumerName : consumerprop.keySet()) {
-            String safeName = escapeHtml(consumerName.toString());
-            html += "<option value=\"" + safeName + "\">" + safeName + "</option>";
+                String safeName = escapeHtml(consumerName.toString());
+                html += "<option value=\"" + safeName + "\">" + safeName + "</option>";
             }
         }
         html += "</select></div>";
@@ -40,13 +40,13 @@ public class MicrozChangeUtil {
         return html;
     }
 
-        private static String escapeHtml(String value) {
+    private static String escapeHtml(String value) {
         return value.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&#39;");
-        }
+    }
 
     public static Properties getAppServerProperties() {
         return getProperties(APPSERVER_FILE);
@@ -60,17 +60,12 @@ public class MicrozChangeUtil {
         try {
             Properties props = new Properties();
             props.load(new FileInputStream(propsFile));
-            LOGGER.log(Level.SEVERE, "Loaded MicroZ Conf File :: " + propsFile);
+            LOGGER.log(Level.INFO, "Loaded MicroZ Conf File :: " + propsFile);
             return props;
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, "Unable to load Conf File for MicroZ :: " + propsFile, ex);
             return null;
         }
-    }
-
-    public static void main(String[] a) {
-        Properties prop = getProperties(APPSERVER_FILE);
-        System.out.println(prop);
     }
 
     public static synchronized boolean saveProperty(String type, String key, String value) {
