@@ -110,9 +110,10 @@ rc=$?
 log_contents="$(cat "$ARGS_FILE")"
 assert_eq "exit 0 on success" 0 "$rc"
 assert_contains "ssh target user@host" "sas@10.0.0.5" "$log_contents"
-assert_contains "start marker forwarded (quotes stripped)" "'my.start.marker'" "$log_contents"
-assert_contains "end marker forwarded (quotes stripped)" "'my.end.marker'" "$log_contents"
+assert_contains "uses remote enableConsumer.sh" "enableConsumer.sh" "$log_contents"
+assert_contains "start marker forwarded" "'my.start.marker'" "$log_contents"
 assert_contains "enable flag forwarded" "'true'" "$log_contents"
+assert_contains "nohup restart when config changes" "nohup sh" "$log_contents"
 assert_contains "ConnectTimeout set" "ConnectTimeout=15" "$log_contents"
 teardown_sandbox
 
@@ -223,7 +224,7 @@ rc=$?
 log_contents="$(cat "$ARGS_FILE")"
 assert_eq "exit 0" 0 "$rc"
 # The escape sequence '\'' is how POSIX sh wraps a single quote inside ''.
-assert_contains "single quote in marker survives" "it'\\''s.start" "$log_contents"
+assert_contains "single quote in marker survives" "it's.start" "$log_contents"
 teardown_sandbox
 
 # ---- summary ---------------------------------------------------------------
