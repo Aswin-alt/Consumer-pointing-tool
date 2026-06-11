@@ -1,11 +1,13 @@
 # Credentials — never commit
 MicrozToolProperties/.ssh_pass
+MicrozToolProperties/.ssh_pass.enc
 MicrozToolProperties/.vault_pass
 MicrozToolProperties/admin.properties
 
 # Build artifacts
 *.war
 *.class
+*.log
 MicrozConsumerTool/WEB-INF/classes/
 
 # macOS metadata
