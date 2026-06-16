@@ -1,13 +1,14 @@
 #!/bin/sh
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SH_LOG="/tmp/microz_logs/enableLocalIDCConsumer.log"
-SSH_PASS_FILE="${MICROZ_SSH_PASS_FILE:-/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/.ssh_pass}"
+SSH_KEY_FILE="${MICROZ_SSH_KEY_FILE:-$SCRIPT_DIR/id_rsa}"
+PLAYBOOK="$SCRIPT_DIR/enableLocalIDCConsumer.yml"
+ANSIBLE_CFG="$SCRIPT_DIR/ansible.cfg"
 REMOTE_SCRIPT="/home/sas/dad/AdventNet/Sas/tomcat/webapps/ROOT/WEB-INF/conf/enableConsumer.sh"
 CONFIG_FILE="/home/sas/dad/AdventNet/Sas/tomcat/webapps/ROOT/WEB-INF/conf/configuration.properties"
 REMOTE_RUN="/home/sas/dad/AdventNet/Sas/bin/remote_run.sh"
-
-SSHPASS_CMD="${SSHPASS_BIN:-/opt/homebrew/bin/sshpass}"
-SSH_CMD="${SSH_BIN:-/usr/bin/ssh}"
+ANSIBLE_PLAYBOOK_CMD="${ANSIBLE_PLAYBOOK_BIN:-$(command -v ansible-playbook 2>/dev/null)}"
 _TIMEOUT_BIN="${TIMEOUT_BIN:-$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null)}"
 
 mkdir -p "$(dirname "$SH_LOG")"
@@ -37,14 +38,25 @@ if [ "$ENABLE_FLAG" != "true" ] && [ "$ENABLE_FLAG" != "false" ]; then
     exit 2
 fi
 
-HOST_PART="${TARGET_HOST##*@}"
-if [ -z "$HOST_PART" ]; then
+ANSIBLE_USER="${TARGET_HOST%%@*}"
+ANSIBLE_HOST="${TARGET_HOST##*@}"
+if [ -z "$ANSIBLE_HOST" ] || [ "$ANSIBLE_USER" = "$TARGET_HOST" ]; then
     log "ERROR: malformed user@host: $TARGET_HOST"
     exit 2
 fi
 
-if [ ! -f "$SSH_PASS_FILE" ]; then
-    log "ERROR: ssh password file not found: $SSH_PASS_FILE"
+if [ ! -f "$SSH_KEY_FILE" ]; then
+    log "ERROR: ssh private key not found: $SSH_KEY_FILE"
+    exit 3
+fi
+
+if [ ! -f "$PLAYBOOK" ]; then
+    log "ERROR: ansible playbook not found: $PLAYBOOK"
+    exit 3
+fi
+
+if [ -z "$ANSIBLE_PLAYBOOK_CMD" ] || [ ! -x "$ANSIBLE_PLAYBOOK_CMD" ]; then
+    log "ERROR: ansible-playbook not found in PATH"
     exit 3
 fi
 
@@ -79,46 +91,82 @@ NEW=\$(grep -m1 '^${START_MARKER}=' '${CONFIG_FILE}' 2>/dev/null | cut -d= -f2-)
 if [ \"\$OLD\" != \"\$NEW\" ]; then nohup sh '${REMOTE_RUN}' </dev/null >/dev/null 2>&1 & fi; \
 exit \$EC"
 
+VARS_FILE="$(mktemp "${TMPDIR:-/tmp}/microz_ansible_vars.XXXXXX")"
+CAPTURE_FILE="$(mktemp "${TMPDIR:-/tmp}/microz_ansible_out.XXXXXX")"
+chmod 600 "$VARS_FILE" "$CAPTURE_FILE"
+trap 'rm -f "$VARS_FILE" "$CAPTURE_FILE"' EXIT INT TERM
+
+{
+    printf 'ansible_user: %s\n' "$ANSIBLE_USER"
+    printf 'ansible_ssh_private_key_file: %s\n' "$SSH_KEY_FILE"
+    printf 'remote_cmd: |\n'
+    printf '  %s\n' "$REMOTE_CMD"
+} > "$VARS_FILE"
+
+export ANSIBLE_CONFIG="$ANSIBLE_CFG"
+export ANSIBLE_HOST_KEY_CHECKING=False
+export ANSIBLE_LOCAL_TEMP="/tmp/microz_ansible/tmp"
+export ANSIBLE_REMOTE_TEMP="/tmp/microz_ansible/remote_tmp"
+
+log "ansible-playbook -i ${ANSIBLE_HOST}, -e @${VARS_FILE} ${PLAYBOOK}"
+
 if [ -n "$_TIMEOUT_BIN" ]; then
     "$_TIMEOUT_BIN" 60 \
-        "$SSHPASS_CMD" -f "$SSH_PASS_FILE" \
-        "$SSH_CMD" \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=15 \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            "$TARGET_HOST" \
-            "$REMOTE_CMD" >> "$SH_LOG" 2>&1
-    RC=$?
+        "$ANSIBLE_PLAYBOOK_CMD" \
+            -i "${ANSIBLE_HOST}," \
+            -e "@${VARS_FILE}" \
+            "$PLAYBOOK" > "$CAPTURE_FILE" 2>&1
+    OUTER_RC=$?
 else
-    "$SSHPASS_CMD" -f "$SSH_PASS_FILE" \
-        "$SSH_CMD" \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=15 \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            "$TARGET_HOST" \
-            "$REMOTE_CMD" >> "$SH_LOG" 2>&1 &
+    "$ANSIBLE_PLAYBOOK_CMD" \
+        -i "${ANSIBLE_HOST}," \
+        -e "@${VARS_FILE}" \
+        "$PLAYBOOK" > "$CAPTURE_FILE" 2>&1 &
     _CMD_PID=$!
     ( sleep 60; kill -TERM "$_CMD_PID" 2>/dev/null ) &
     _WATCH_PID=$!
     wait "$_CMD_PID"
-    RC=$?
+    OUTER_RC=$?
     kill "$_WATCH_PID" 2>/dev/null
     wait "$_WATCH_PID" 2>/dev/null
 fi
 
-if [ "$RC" -eq 5 ]; then
-    log "ERROR: incorrect password for $TARGET_HOST (sshpass exit 5)"
-fi
+cat "$CAPTURE_FILE" >> "$SH_LOG"
 
-if [ "$RC" -eq 255 ] || [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ] || [ "$RC" -eq 143 ]; then
-    log "SKIP: $TARGET_HOST unreachable or timed out (exit $RC)"
-    log "ssh exit code for $TARGET_HOST : $RC"
+if [ "$OUTER_RC" -eq 124 ] || [ "$OUTER_RC" -eq 137 ] || [ "$OUTER_RC" -eq 143 ]; then
+    log "SKIP: $TARGET_HOST unreachable or timed out (exit $OUTER_RC)"
+    log "ansible exit code for $TARGET_HOST : $OUTER_RC"
     log "===== SCRIPT DONE ====="
     exit 0
 fi
 
-log "ssh exit code for $TARGET_HOST : $RC"
+SENTINEL_RC="$(grep -oE 'MICROZ_REMOTE_RC=[0-9]+' "$CAPTURE_FILE" | tail -1 | sed 's/MICROZ_REMOTE_RC=//')"
+
+if [ -n "$SENTINEL_RC" ]; then
+    RC=$SENTINEL_RC
+elif grep -qiE 'Permission denied|publickey|Authentication failed' "$CAPTURE_FILE"; then
+    RC=5
+    log "ERROR: authentication failed for $TARGET_HOST"
+elif grep -qi 'UNREACHABLE' "$CAPTURE_FILE" || [ "$OUTER_RC" -eq 4 ]; then
+    log "SKIP: $TARGET_HOST unreachable (ansible exit $OUTER_RC)"
+    log "ansible exit code for $TARGET_HOST : $OUTER_RC"
+    log "===== SCRIPT DONE ====="
+    exit 0
+else
+    RC=$OUTER_RC
+fi
+
+if [ "$RC" -eq 5 ]; then
+    log "ERROR: authentication failed for $TARGET_HOST (exit 5)"
+fi
+
+if [ "$RC" -eq 255 ]; then
+    log "SKIP: $TARGET_HOST unreachable or timed out (exit $RC)"
+    log "ansible exit code for $TARGET_HOST : $RC"
+    log "===== SCRIPT DONE ====="
+    exit 0
+fi
+
+log "ansible exit code for $TARGET_HOST : $RC"
 log "===== SCRIPT DONE ====="
 exit $RC

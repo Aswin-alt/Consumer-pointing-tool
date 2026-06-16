@@ -1,5 +1,6 @@
 # Credentials — never commit
 MicrozToolProperties/.ssh_pass
+MicrozToolProperties/id_rsa
 MicrozToolProperties/.vault_pass
 MicrozToolProperties/admin.properties
 

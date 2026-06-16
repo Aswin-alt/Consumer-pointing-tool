@@ -23,7 +23,7 @@ public class MicrozConsumerServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
     private static final String LOG_DIR = "/tmp/microz_logs";
     private static final String ADMIN_CONFIG_FILE =
-        "/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/admin.properties";
+        MicrozChangeUtil.TOOL_PROPS + "admin.properties";
 
     private static String getAdminProperty(String key, String fallback) {
         try {
@@ -128,7 +128,7 @@ public class MicrozConsumerServlet extends HttpServlet {
                                         public int[] call() {
                                             ArrayList<String> cmdList = new ArrayList<>();
                                             cmdList.add("sh");
-                                            cmdList.add("/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/enableLocalIDCConsumer.sh");
+                                            cmdList.add(MicrozChangeUtil.TOOL_PROPS + "enableLocalIDCConsumer.sh");
                                             cmdList.add("sas@" + hostIp);
                                             cmdList.add(startMarker);
                                             cmdList.add(endMarker);

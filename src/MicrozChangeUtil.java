@@ -6,8 +6,11 @@ import java.util.logging.Logger;
 
 public class MicrozChangeUtil {
     private static final Logger LOGGER = Logger.getLogger(MicrozChangeUtil.class.getName());
-    private static final String APPSERVER_FILE = "/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/appserver.properties";
-    private static final String CONSUMER_FILE  = "/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/DeskConsumer.properties";
+    public static final String PROJECT_ROOT =
+        "/Users/aswin-20182/Documents/Consumer-pointing-tool-ansible-playbook/Consumer-pointing-tool";
+    public static final String TOOL_PROPS = PROJECT_ROOT + "/MicrozToolProperties/";
+    private static final String APPSERVER_FILE = TOOL_PROPS + "appserver.properties";
+    private static final String CONSUMER_FILE  = TOOL_PROPS + "DeskConsumer.properties";
 
     public static String loadMicrozFormData() {
         Properties prop = getAppServerProperties();

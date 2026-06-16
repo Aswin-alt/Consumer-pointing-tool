@@ -1,0 +1,25 @@
+---
+- name: Enable or disable Microz consumer on a single remote host
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Run remote enableConsumer flow
+      ansible.builtin.shell: "{{ remote_cmd }}"
+      register: remote_result
+      failed_when: false
+      changed_when: false
+
+    - name: Echo remote stdout
+      ansible.builtin.debug:
+        msg: "{{ remote_result.stdout_lines }}"
+      when: remote_result.stdout_lines | length > 0
+
+    - name: Echo remote stderr
+      ansible.builtin.debug:
+        msg: "{{ remote_result.stderr_lines }}"
+      when: remote_result.stderr_lines | length > 0
+
+    - name: Report remote exit code
+      ansible.builtin.debug:
+        msg: "MICROZ_REMOTE_RC={{ remote_result.rc }}"

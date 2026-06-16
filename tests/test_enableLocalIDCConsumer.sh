@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regression tests for enableLocalIDCConsumer.sh.
 #
-# We never reach a real host: sshpass / ssh / timeout are stubbed on PATH and
+# We never reach a real host: ansible-playbook / timeout are stubbed on PATH and
 # record their argv to a file so each test can assert what would have been
 # executed. This is what prevents the "playbook hangs / silently succeeds"
 # class of bug from coming back.
@@ -24,29 +24,44 @@ setup_sandbox() {
     mkdir -p "$BIN"
     TOOL_DIR="$SANDBOX/MicrozToolProperties"
     mkdir -p "$TOOL_DIR"
-    echo "secret" > "$TOOL_DIR/.ssh_pass"
-    chmod 600 "$TOOL_DIR/.ssh_pass"
+    echo "dummy-key" > "$TOOL_DIR/id_rsa"
+    chmod 600 "$TOOL_DIR/id_rsa"
+    cp "$REPO_DIR/MicrozToolProperties/enableLocalIDCConsumer.yml" "$TOOL_DIR/"
+    cp "$REPO_DIR/MicrozToolProperties/ansible.cfg" "$TOOL_DIR/"
     ARGS_FILE="$SANDBOX/cmd.log"
     : > "$ARGS_FILE"
 
-    # Stub sshpass: log argv, then exec the remaining "ssh ..." part so the
-    # ssh stub sets the real exit code.
-    cat > "$BIN/sshpass" <<EOF
+    # Stub ansible-playbook: log argv + vars file contents, simulate outcomes.
+    cat > "$BIN/ansible-playbook" <<EOF
 #!/usr/bin/env bash
-echo "sshpass \$*" >> "$ARGS_FILE"
-# drop the -f <file> flag pair, then exec the rest
-shift; shift
-exec "\$@"
+echo "ansible-playbook \$*" >> "$ARGS_FILE"
+varsfile=""
+prev=""
+for arg in "\$@"; do
+    if [ "\$prev" = "-e" ]; then
+        case "\$arg" in
+            @*) varsfile="\${arg#@}" ;;
+        esac
+        prev=""
+        continue
+    fi
+    prev="\$arg"
+done
+if [ -n "\$varsfile" ] && [ -f "\$varsfile" ]; then
+    cat "\$varsfile" >> "$ARGS_FILE"
+fi
+if [ -n "\${AUTH_FAIL:-}" ]; then
+    echo "Permission denied (publickey)."
+    exit 4
+fi
+if [ -n "\${UNREACHABLE:-}" ]; then
+    echo "UNREACHABLE!"
+    exit 4
+fi
+echo "MICROZ_REMOTE_RC=\${REMOTE_RC:-0}"
+exit 0
 EOF
-    chmod +x "$BIN/sshpass"
-
-    # Stub ssh: log argv, exit with whatever SSH_EXIT says.
-    cat > "$BIN/ssh" <<EOF
-#!/usr/bin/env bash
-echo "ssh \$*" >> "$ARGS_FILE"
-exit \${SSH_EXIT:-0}
-EOF
-    chmod +x "$BIN/ssh"
+    chmod +x "$BIN/ansible-playbook"
 
     # Stub timeout: pass through, unless TIMEOUT_FORCE is set (simulate hang kill).
     cat > "$BIN/timeout" <<EOF
@@ -61,17 +76,15 @@ EOF
     chmod +x "$BIN/timeout"
 
     export PATH="$BIN:$PATH"
-    export MICROZ_SSH_PASS_FILE="$TOOL_DIR/.ssh_pass"
-    export SSHPASS_BIN="$BIN/sshpass"
-    export SSH_BIN="$BIN/ssh"
+    export MICROZ_SSH_KEY_FILE="$TOOL_DIR/id_rsa"
+    export ANSIBLE_PLAYBOOK_BIN="$BIN/ansible-playbook"
     export TIMEOUT_BIN="$BIN/timeout"
-    # Send the script's own log somewhere disposable.
     export TMPDIR="$SANDBOX"
 }
 
 teardown_sandbox() {
     rm -rf "$SANDBOX"
-    unset SSH_EXIT TIMEOUT_FORCE MICROZ_SSH_PASS_FILE SSHPASS_BIN SSH_BIN TIMEOUT_BIN
+    unset REMOTE_RC AUTH_FAIL UNREACHABLE TIMEOUT_FORCE MICROZ_SSH_KEY_FILE ANSIBLE_PLAYBOOK_BIN TIMEOUT_BIN
 }
 
 assert_eq() {
@@ -103,18 +116,18 @@ run_case() {
 }
 
 # ---- 1. happy path ----------------------------------------------------------
-run_case "happy path: ssh exit 0 -> script exit 0, forwards user/host/markers/flag"
+run_case "happy path: remote rc 0 -> script exit 0, forwards host/markers/flag"
 setup_sandbox
-SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 '"my.start.marker"' '"my.end.marker"' true
+REMOTE_RC=0 bash "$TARGET" sas@10.0.0.5 '"my.start.marker"' '"my.end.marker"' true
 rc=$?
 log_contents="$(cat "$ARGS_FILE")"
 assert_eq "exit 0 on success" 0 "$rc"
-assert_contains "ssh target user@host" "sas@10.0.0.5" "$log_contents"
+assert_contains "inventory host" "10.0.0.5," "$log_contents"
 assert_contains "uses remote enableConsumer.sh" "enableConsumer.sh" "$log_contents"
 assert_contains "start marker forwarded" "'my.start.marker'" "$log_contents"
 assert_contains "enable flag forwarded" "'true'" "$log_contents"
 assert_contains "nohup restart when config changes" "nohup sh" "$log_contents"
-assert_contains "ConnectTimeout set" "ConnectTimeout=15" "$log_contents"
+assert_contains "ansible user set" "ansible_user: sas" "$log_contents"
 teardown_sandbox
 
 # ---- 2. arg validation ------------------------------------------------------
@@ -136,27 +149,24 @@ bash "$TARGET" "nohostpart@" a b true
 assert_eq "exit 2 when host empty" 2 $?
 teardown_sandbox
 
-# ---- 3. missing password file ----------------------------------------------
-run_case "missing ssh password file -> exit 3, never reaches ssh"
+# ---- 3. missing key file ----------------------------------------------------
+run_case "missing ssh private key -> exit 3, never reaches ansible"
 setup_sandbox
-rm -f "$MICROZ_SSH_PASS_FILE"
-SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 a b true
+rm -f "$MICROZ_SSH_KEY_FILE"
+REMOTE_RC=0 bash "$TARGET" sas@10.0.0.5 a b true
 rc=$?
-assert_eq "exit 3 when password file absent" 3 "$rc"
-assert_eq "ssh never invoked" "" "$(cat "$ARGS_FILE")"
+assert_eq "exit 3 when key file absent" 3 "$rc"
+assert_eq "ansible never invoked" "" "$(cat "$ARGS_FILE")"
 teardown_sandbox
 
-# ---- 4. unreachable host (ssh 255) -> skip ---------------------------------
-run_case "ssh exit 255 (unreachable) -> script exits 0 (skip)"
+# ---- 4. unreachable host -> skip --------------------------------------------
+run_case "unreachable host -> script exits 0 (skip)"
 setup_sandbox
-SSH_EXIT=255 bash "$TARGET" sas@10.0.0.99 a b false
+UNREACHABLE=1 bash "$TARGET" sas@10.0.0.99 a b false
 assert_eq "skip on unreachable" 0 $?
 teardown_sandbox
 
 # ---- 5. HANG REGRESSION: timeout -> skip, do not propagate failure ---------
-# This is the case that motivated the rewrite. Before the sshpass version,
-# the playbook could hang indefinitely. Now the wrapper must bound the run
-# and surface it as a skip, not a hang.
 run_case "overall timeout fires (exit 124) -> script exits 0 (skip)"
 setup_sandbox
 TIMEOUT_FORCE=124 bash "$TARGET" sas@10.0.0.5 a b true
@@ -170,60 +180,42 @@ assert_eq "skip on SIGKILL" 0 $?
 teardown_sandbox
 
 # ---- 6. genuine remote failure must NOT be swallowed -----------------------
-# The old playbook had ignore_errors:yes which masked real restart failures.
-# The new wrapper must propagate non-transport exit codes.
 run_case "remote script fails (exit 1) -> script exits 1 (not swallowed)"
 setup_sandbox
-SSH_EXIT=1 bash "$TARGET" sas@10.0.0.5 a b true
+REMOTE_RC=1 bash "$TARGET" sas@10.0.0.5 a b true
 assert_eq "propagate remote failure" 1 $?
 teardown_sandbox
 
 run_case "remote script fails (exit 7) -> script exits 7"
 setup_sandbox
-SSH_EXIT=7 bash "$TARGET" sas@10.0.0.5 a b true
+REMOTE_RC=7 bash "$TARGET" sas@10.0.0.5 a b true
 assert_eq "propagate arbitrary remote code" 7 $?
 teardown_sandbox
 
-# ---- 6b. bad password (exit 5) must propagate AND be labeled --------------
-# sshpass exit 5 = "incorrect password". This is the failure mode the user hit
-# in production; the wrapper must NOT silently skip it.
-run_case "sshpass exit 5 -> script exits 5, log labels it as incorrect password"
+# ---- 6b. auth failure must propagate AND be labeled ------------------------
+run_case "auth failure -> script exits 5, log labels authentication failed"
 setup_sandbox
-SH_LOG_OVERRIDE="$SANDBOX/microz.log"
-# Re-stub sshpass to specifically return 5.
-cat > "$BIN/sshpass" <<'EOF'
-#!/usr/bin/env bash
-exit 5
-EOF
-chmod +x "$BIN/sshpass"
-# Point the script's log into the sandbox by patching the script path.
-SH_LOG_FILE_BEFORE=$(mktemp)
-bash "$TARGET" sas@10.0.0.5 a b true
+AUTH_FAIL=1 bash "$TARGET" sas@10.0.0.5 a b true
 rc=$?
 assert_eq "exit 5 propagated" 5 "$rc"
-# The script writes to /tmp/microz_logs/enableLocalIDCConsumer.log — read the tail.
-assert_contains "log labels exit 5" "incorrect password" "$(tail -20 /tmp/microz_logs/enableLocalIDCConsumer.log)"
+assert_contains "log labels exit 5" "authentication failed" "$(tail -20 /tmp/microz_logs/enableLocalIDCConsumer.log)"
 teardown_sandbox
 
-# ---- 6c. password-auth is forced ------------------------------------------
-# Pubkey auth being attempted first can cause inconsistent results across
-# hosts. Wrapper must pin auth to password so sshpass actually drives it.
-run_case "ssh invocation forces password auth and disables pubkey"
+# ---- 6c. private key is passed to ansible ----------------------------------
+run_case "ansible vars include private key file path"
 setup_sandbox
-SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 a b true >/dev/null
+REMOTE_RC=0 bash "$TARGET" sas@10.0.0.5 a b true >/dev/null
 log_contents="$(cat "$ARGS_FILE")"
-assert_contains "PreferredAuthentications=password" "PreferredAuthentications=password" "$log_contents"
-assert_contains "PubkeyAuthentication=no" "PubkeyAuthentication=no" "$log_contents"
+assert_contains "ansible_ssh_private_key_file set" "ansible_ssh_private_key_file:" "$log_contents"
 teardown_sandbox
 
 # ---- 7. quoting safety ------------------------------------------------------
 run_case "marker with single quote is escaped, not injected"
 setup_sandbox
-SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 "it's.start" 'plain.end' true
+REMOTE_RC=0 bash "$TARGET" sas@10.0.0.5 "it's.start" 'plain.end' true
 rc=$?
 log_contents="$(cat "$ARGS_FILE")"
 assert_eq "exit 0" 0 "$rc"
-# The escape sequence '\'' is how POSIX sh wraps a single quote inside ''.
 assert_contains "single quote in marker survives" "it's.start" "$log_contents"
 teardown_sandbox
 
