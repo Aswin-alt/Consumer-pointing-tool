@@ -24,7 +24,7 @@ public class MicrozChangeUtil {
             }
         }
         html += "</select></div>";
-        html += "<div class=\"formInput\">"
+        html += "<div class=\"formInput consumer-field\">"
             + "<label class=\"formLabel\" for=\"ConsumerName\">Consumers</label>"
             + "<select id=\"ConsumerName\" name=\"ConsumerName\" multiple=\"multiple\">";
         if (consumerprop != null) {
@@ -33,8 +33,9 @@ public class MicrozChangeUtil {
                 html += "<option value=\"" + safeName + "\">" + safeName + "</option>";
             }
         }
-        html += "</select></div>";
-        html += "<div class=\"tip\">Tip: You can select multiple consumers.</div>";
+        html += "</select>"
+            + "<div class=\"tip\">Tip: You can select multiple consumers.</div>"
+            + "</div>";
         html += "<div class=\"formInput\"><button id=\"enableBtn\""
             + " class=\"button\" type=\"button\">Enable Consumers</button></div>";
         return html;

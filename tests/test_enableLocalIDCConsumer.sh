@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression tests for enableLocalIDCConsumer.sh.
+# Regression tests for enableLocalIDCConsumer.sh (TOTP via MICROZ_SSH_TOTP).
 #
 # sshpass / ssh are stubbed on PATH; argv is recorded for assertions.
 # Run:  bash tests/test_enableLocalIDCConsumer.sh
@@ -18,17 +18,20 @@ setup_sandbox() {
     SANDBOX="$(mktemp -d)"
     BIN="$SANDBOX/bin"
     mkdir -p "$BIN"
-    TOOL_DIR="$SANDBOX/MicrozToolProperties"
-    mkdir -p "$TOOL_DIR"
-    echo "secret" > "$TOOL_DIR/.ssh_pass"
-    chmod 600 "$TOOL_DIR/.ssh_pass"
     ARGS_FILE="$SANDBOX/cmd.log"
     : > "$ARGS_FILE"
 
     cat > "$BIN/sshpass" <<EOF
 #!/usr/bin/env bash
 echo "sshpass \$*" >> "$ARGS_FILE"
-shift; shift
+if [ "\$1" = "-P" ]; then
+    echo "OTP_PROMPT=\$2" >> "$ARGS_FILE"
+    shift 2
+fi
+if [ "\$1" = "-e" ]; then
+    echo "SSHPASS=\${SSHPASS:-}" >> "$ARGS_FILE"
+    shift
+fi
 exec "\$@"
 EOF
     chmod +x "$BIN/sshpass"
@@ -41,23 +44,15 @@ EOF
     chmod +x "$BIN/ssh"
 
     export PATH="$BIN:$PATH"
-    export MICROZ_SSH_PASS_FILE="$TOOL_DIR/.ssh_pass"
+    export MICROZ_SSH_TOTP="123456"
     export SSHPASS_BIN="$BIN/sshpass"
     export SSH_BIN="$BIN/ssh"
     export TMPDIR="$SANDBOX"
 }
 
-encrypt_sandbox_pass() {
-    export MICROZ_VAULT_KEY="test-vault-key"
-    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
-        -pass env:MICROZ_VAULT_KEY -in "$TOOL_DIR/.ssh_pass" -out "$TOOL_DIR/.ssh_pass.enc"
-    rm -f "$TOOL_DIR/.ssh_pass"
-    export MICROZ_SSH_PASS_ENC_FILE="$TOOL_DIR/.ssh_pass.enc"
-}
-
 teardown_sandbox() {
     rm -rf "$SANDBOX"
-    unset SSH_EXIT MICROZ_SSH_PASS_FILE MICROZ_SSH_PASS_ENC_FILE MICROZ_VAULT_KEY SSHPASS_BIN SSH_BIN
+    unset SSH_EXIT MICROZ_SSH_TOTP SSHPASS_BIN SSH_BIN
 }
 
 assert_eq() {
@@ -89,12 +84,15 @@ run_case() {
 }
 
 # ---- 1. happy path ----------------------------------------------------------
-run_case "happy path: ssh exit 0 -> script exit 0, forwards user/host/markers/flag"
+run_case "happy path: TOTP via -e -> script exit 0, forwards user/host/markers/flag"
 setup_sandbox
 SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 '"my.start.marker"' '"my.end.marker"' true
 rc=$?
 log_contents="$(cat "$ARGS_FILE")"
 assert_eq "exit 0 on success" 0 "$rc"
+assert_contains "sshpass uses -P OTP prompt" "OTP_PROMPT=OTP" "$log_contents"
+assert_contains "sshpass uses -e" "sshpass -P OTP -e" "$log_contents"
+assert_contains "TOTP passed to sshpass" "SSHPASS=123456" "$log_contents"
 assert_contains "ssh target user@host" "sas@10.0.0.5" "$log_contents"
 assert_contains "uses remote enableConsumer.sh" "enableConsumer.sh" "$log_contents"
 assert_contains "start marker forwarded" '"my.start.marker"' "$log_contents"
@@ -102,15 +100,12 @@ assert_contains "enable flag forwarded" "true" "$log_contents"
 assert_contains "ConnectTimeout set" "ConnectTimeout=15" "$log_contents"
 teardown_sandbox
 
-# ---- 2. encrypted password file -------------------------------------------
-run_case "encrypted ssh password + MICROZ_VAULT_KEY -> ssh invoked successfully"
+# ---- 2. missing TOTP --------------------------------------------------------
+run_case "missing MICROZ_SSH_TOTP -> exit 1"
 setup_sandbox
-encrypt_sandbox_pass
-SSH_EXIT=0 bash "$TARGET" sas@10.0.0.5 a b true
-rc=$?
-log_contents="$(cat "$ARGS_FILE")"
-assert_eq "exit 0 with encrypted password" 0 "$rc"
-assert_contains "ssh invoked with encrypted creds" "sas@10.0.0.5" "$log_contents"
+unset MICROZ_SSH_TOTP
+bash "$TARGET" sas@10.0.0.5 a b true
+assert_eq "missing TOTP exits 1" 1 $?
 teardown_sandbox
 
 # ---- 3. remote failure propagation ------------------------------------------

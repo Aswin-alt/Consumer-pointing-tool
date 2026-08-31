@@ -71,6 +71,7 @@ function renderResult(data) {
 function enableConsumer() {
 	var appServerName = $("#AppServerName").val();
 	var consumerNames = $("#ConsumerName").val() || [];
+	var totpCode = ($("#totpCode").val() || "").trim();
 	var $btn = $("#enableBtn");
 
 	if (!appServerName) {
@@ -80,6 +81,12 @@ function enableConsumer() {
 
 	if (!consumerNames.length) {
 		$("#responseContainer").html("<div class='toast fail'>Please select at least one consumer.</div>");
+		return;
+	}
+
+	if (!/^\d{6,8}$/.test(totpCode)) {
+		$("#responseContainer").html("<div class='toast fail'>Please enter a valid TOTP code (6–8 digits).</div>");
+		$("#totpCode").focus();
 		return;
 	}
 
@@ -93,7 +100,8 @@ function enableConsumer() {
 		data: {
 			action: "enableConsumer",
 			AppServerName: appServerName,
-			ConsumerName: consumerNames
+			ConsumerName: consumerNames,
+			totp: totpCode
 		},
 		success: function(responseJson) {
 			renderResult(responseJson);
@@ -107,6 +115,7 @@ function enableConsumer() {
 		},
 		complete: function() {
 			$btn.prop("disabled", false).text("Enable Consumers");
+			$("#totpCode").val("");
 		}
 	});
 }

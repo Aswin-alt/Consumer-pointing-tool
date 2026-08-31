@@ -103,6 +103,11 @@
         <main class="config-grid">
             <section class="panel form-panel">
                 <h2>Consumer Configuration</h2>
+                <div class="formInput totp-field">
+                    <label class="formLabel" for="totpCode">TOTP Code</label>
+                    <input type="text" id="totpCode" class="totp-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="one-time-code" placeholder="Enter 6-digit code" />
+                    <div class="tip">Required for every enable operation. Enter your current authenticator code.</div>
+                </div>
                 <div class="formContainer microz-form" id="formData"></div>
             </section>
             <section class="panel result-panel">

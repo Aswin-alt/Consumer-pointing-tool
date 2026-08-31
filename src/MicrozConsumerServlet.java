@@ -71,6 +71,8 @@ public class MicrozConsumerServlet extends HttpServlet {
             if ("enableConsumer".equals(action)) {
                 String appServerName = request.getParameter("AppServerName") != null
                         ? request.getParameter("AppServerName").toString() : "";
+                String totp = request.getParameter("totp") != null
+                        ? request.getParameter("totp").trim() : "";
                 String[] consumerNames = request.getParameterValues("ConsumerName");
                 if (consumerNames == null || consumerNames.length == 0) {
                     String oneConsumer = request.getParameter("ConsumerName") != null
@@ -79,6 +81,17 @@ public class MicrozConsumerServlet extends HttpServlet {
                         consumerNames = new String[] { oneConsumer };
                     }
                 }
+
+                response.setContentType("application/json; charset=UTF-8");
+                if (totp.isEmpty() || !totp.matches("\\d{6,8}")) {
+                    writeLog("Enable request rejected: missing or invalid TOTP");
+                    response.getWriter().write("{\"appServer\":\"" + escapeJson(appServerName)
+                            + "\",\"results\":[{\"consumer\":\"\",\"success\":false,"
+                            + "\"message\":\"TOTP is required (6-8 digits). Enter your current authenticator code.\"}]}");
+                    return;
+                }
+
+                final String totpCode = totp;
 
                 writeLog("===== NEW ENABLE REQUEST =====");
                 writeLog("AppServerName: " + appServerName);
@@ -138,6 +151,7 @@ public class MicrozConsumerServlet extends HttpServlet {
                                             writeLog("Command: " + String.join(" ", cmdList));
                                             try {
                                                 ProcessBuilder pb = new ProcessBuilder(cmdList);
+                                                pb.environment().put("MICROZ_SSH_TOTP", totpCode);
                                                 pb.redirectErrorStream(true);
                                                 Process process = pb.start();
                                                 BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));

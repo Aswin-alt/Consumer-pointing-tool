@@ -228,11 +228,11 @@ body::after {
 }
 
 /* ─── Form ───────────────────────────────────────────────────────────── */
-.microz-form .formInput { margin-bottom: 16px; }
+.microz-form .formInput { margin-bottom: 20px; }
 
 .microz-form .formLabel {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -242,11 +242,63 @@ body::after {
 
 .microz-form select { width: 100%; }
 
+.totp-field {
+  margin-bottom: 24px;
+  padding-bottom: 4px;
+}
+.totp-field .formLabel {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.totp-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-align: center;
+  background: rgba(255,255,255,.85);
+  color: var(--ink);
+}
+.totp-input:focus {
+  outline: none;
+  border-color: var(--accent-from);
+  box-shadow: 0 0 0 3px rgba(10,132,255,.15);
+}
+.totp-field .tip {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
 .tip {
-  margin-top: -6px;
-  margin-bottom: 16px;
+  margin-top: 10px;
+  margin-bottom: 20px;
+  padding-top: 2px;
   color: var(--ink-muted);
   font-size: 12px;
+  line-height: 1.5;
+}
+
+.consumer-field .select2-container {
+  display: block;
+}
+.consumer-field .tip {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+/* Legacy tips rendered outside .formInput */
+.microz-form .formInput + .tip {
+  margin-top: 10px;
+  margin-bottom: 20px;
 }
 
 /* ─── CTA Button ─────────────────────────────────────────────────────── */
