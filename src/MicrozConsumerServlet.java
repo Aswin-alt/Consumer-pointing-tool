@@ -1,16 +1,13 @@
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileWriter;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import jakarta.servlet.ServletException;
@@ -24,6 +21,10 @@ public class MicrozConsumerServlet extends HttpServlet {
     private static final String LOG_DIR = "/tmp/microz_logs";
     private static final String ADMIN_CONFIG_FILE =
         "/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/admin.properties";
+    private static final long JOB_TTL_MS = 30L * 60L * 1000L;
+
+    private static final ConcurrentHashMap<String, EnableJob> JOBS = new ConcurrentHashMap<>();
+    private static final ExecutorService JOB_EXECUTOR = Executors.newCachedThreadPool();
 
     private static String getAdminProperty(String key, String fallback) {
         try {
@@ -55,6 +56,20 @@ public class MicrozConsumerServlet extends HttpServlet {
         }
     }
 
+    private void cleanupOldJobs() {
+        long now = System.currentTimeMillis();
+        Iterator<Map.Entry<String, EnableJob>> it = JOBS.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, EnableJob> e = it.next();
+            EnableJob job = e.getValue();
+            EnableJob.Status st = job.getStatus();
+            boolean terminal = st == EnableJob.Status.DONE || st == EnableJob.Status.FAILED;
+            if (terminal && (now - job.getCreatedAt()) > JOB_TTL_MS) {
+                it.remove();
+            }
+        }
+    }
+
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
         try {
@@ -68,11 +83,11 @@ public class MicrozConsumerServlet extends HttpServlet {
                 return;
             }
 
-            if ("enableConsumer".equals(action)) {
+            // ─── Async enable job APIs ─────────────────────────────────
+            if ("startEnable".equals(action)) {
+                cleanupOldJobs();
                 String appServerName = request.getParameter("AppServerName") != null
                         ? request.getParameter("AppServerName").toString() : "";
-                String totp = request.getParameter("totp") != null
-                        ? request.getParameter("totp").trim() : "";
                 String[] consumerNames = request.getParameterValues("ConsumerName");
                 if (consumerNames == null || consumerNames.length == 0) {
                     String oneConsumer = request.getParameter("ConsumerName") != null
@@ -83,144 +98,95 @@ public class MicrozConsumerServlet extends HttpServlet {
                 }
 
                 response.setContentType("application/json; charset=UTF-8");
-                if (totp.isEmpty() || !totp.matches("\\d{6,8}")) {
-                    writeLog("Enable request rejected: missing or invalid TOTP");
-                    response.getWriter().write("{\"appServer\":\"" + escapeJson(appServerName)
-                            + "\",\"results\":[{\"consumer\":\"\",\"success\":false,"
-                            + "\"message\":\"TOTP is required (6-8 digits). Enter your current authenticator code.\"}]}");
+                if (appServerName.isEmpty()) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"App server is required\"}");
+                    return;
+                }
+                if (consumerNames == null || consumerNames.length == 0) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"At least one consumer is required\"}");
                     return;
                 }
 
-                final String totpCode = totp;
+                EnableJob job = new EnableJob(appServerName, consumerNames);
+                JOBS.put(job.getJobId(), job);
+                JOB_EXECUTOR.execute(job);
+                writeLog("Started enable job " + job.getJobId());
+                response.getWriter().write("{\"success\":true,\"jobId\":\"" + escapeJson(job.getJobId()) + "\"}");
+                return;
+            }
 
-                writeLog("===== NEW ENABLE REQUEST =====");
-                writeLog("AppServerName: " + appServerName);
-                writeLog("ConsumerNames count: " + (consumerNames == null ? 0 : consumerNames.length));
-
-                Properties appServerProp = MicrozChangeUtil.getAppServerProperties();
-                Properties consumerProp = MicrozChangeUtil.getDeskConsumerProperties();
-
-                StringBuilder json = new StringBuilder();
-                json.append("{\"appServer\":\"").append(escapeJson(appServerName)).append("\",\"results\":[");
-
-                if (consumerNames != null && consumerNames.length > 0 && appServerProp != null && consumerProp != null) {
-                    for (int i = 0; i < consumerNames.length; i++) {
-                        String consumerName = consumerNames[i];
-                        String consumerPropValue = consumerProp.getProperty(consumerName);
-                        int hostsTried = 0;
-                        int hostsSucceeded = 0;
-                        int targetHostsTried = 0;
-                        int targetHostsSucceeded = 0;
-                        String firstError = "";
-
-                        writeLog("---- Consumer start: " + consumerName + " ----");
-                        writeLog("Consumer property value: " + consumerPropValue);
-
-                        if (consumerPropValue == null || consumerPropValue.isEmpty()) {
-                            firstError = "Consumer entry missing in properties";
-                        } else {
-                            String[] consumerCommentValue = consumerPropValue.split(",", 2);
-                            final String startMarker = consumerCommentValue.length > 0 ? consumerCommentValue[0] : "";
-                            final String endMarker = consumerCommentValue.length > 1 ? consumerCommentValue[1] : "";
-
-                            List<Callable<int[]>> tasks = new ArrayList<>();
-                            final List<String[]> taskMeta = new ArrayList<>();
-
-                            for (Object eachAppKey : appServerProp.keySet()) {
-                                final boolean isTarget = appServerName.equals(eachAppKey.toString());
-                                final String consumerEnable = isTarget ? "true" : "false";
-                                String appServerIp = appServerProp.getProperty(eachAppKey.toString());
-                                if (appServerIp == null || appServerIp.isEmpty()) continue;
-
-                                for (String eachServerIp : appServerIp.split(",")) {
-                                    final String hostIp = eachServerIp.trim();
-                                    if (hostIp.isEmpty()) continue;
-
-                                    taskMeta.add(new String[]{hostIp, consumerEnable, isTarget ? "1" : "0"});
-                                    tasks.add(new Callable<int[]>() {
-                                        public int[] call() {
-                                            ArrayList<String> cmdList = new ArrayList<>();
-                                            cmdList.add("sh");
-                                            cmdList.add("/Users/aswin-20182/Documents/Consumer pointing tool/MicrozToolProperties/enableLocalIDCConsumer.sh");
-                                            cmdList.add("sas@" + hostIp);
-                                            cmdList.add(startMarker);
-                                            cmdList.add(endMarker);
-                                            cmdList.add(consumerEnable);
-
-                                            writeLog("Executing command on host: " + hostIp + ", enable=" + consumerEnable);
-                                            writeLog("Command: " + String.join(" ", cmdList));
-                                            try {
-                                                ProcessBuilder pb = new ProcessBuilder(cmdList);
-                                                pb.environment().put("MICROZ_SSH_TOTP", totpCode);
-                                                pb.redirectErrorStream(true);
-                                                Process process = pb.start();
-                                                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                                                String line;
-                                                while ((line = reader.readLine()) != null) {
-                                                    writeLog("OUTPUT [" + hostIp + "]: " + line);
-                                                }
-                                                int exitCode = process.waitFor();
-                                                writeLog("Exit code for " + hostIp + ": " + exitCode);
-                                                return new int[]{exitCode, isTarget ? 1 : 0};
-                                            } catch (Exception e) {
-                                                writeLog("ERROR on " + hostIp + ": " + e.getMessage());
-                                                return new int[]{-1, isTarget ? 1 : 0};
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            ExecutorService pool = Executors.newFixedThreadPool(Math.min(tasks.size(), 20));
-                            try {
-                                List<Future<int[]>> futures = pool.invokeAll(tasks);
-                                for (int t = 0; t < futures.size(); t++) {
-                                    try {
-                                        int[] result = futures.get(t).get();
-                                        int exitCode = result[0];
-                                        boolean isTarget = result[1] == 1;
-                                        String hostIp = taskMeta.get(t)[0];
-                                        hostsTried++;
-                                        if (isTarget) targetHostsTried++;
-                                        if (exitCode == 0) {
-                                            hostsSucceeded++;
-                                            if (isTarget) targetHostsSucceeded++;
-                                        } else if (firstError.isEmpty()) {
-                                            firstError = "Host " + hostIp + " failed with exit " + exitCode;
-                                        }
-                                    } catch (Exception e) {
-                                        writeLog("Task result error: " + e.getMessage());
-                                    }
-                                }
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                writeLog("Parallel execution interrupted: " + e.getMessage());
-                            } finally {
-                                pool.shutdown();
-                            }
-                        }
-
-                        boolean success = targetHostsTried > 0 && targetHostsSucceeded == targetHostsTried;
-                        String message = "Enabled on " + targetHostsSucceeded + "/" + targetHostsTried
-                                + " target hosts (" + hostsSucceeded + "/" + hostsTried + " total)";
-                        if (!firstError.isEmpty()) {
-                            message = message + ". " + firstError;
-                        }
-
-                        if (i > 0) {
-                            json.append(",");
-                        }
-                        json.append("{\"consumer\":\"").append(escapeJson(consumerName)).append("\",")
-                                .append("\"success\":").append(success).append(",")
-                                .append("\"message\":\"").append(escapeJson(message)).append("\"}");
-                        writeLog("---- Consumer end: " + consumerName + " => " + message + " ----");
-                    }
+            if ("jobStatus".equals(action)) {
+                cleanupOldJobs();
+                String jobId = request.getParameter("jobId") != null
+                        ? request.getParameter("jobId").trim() : "";
+                response.setContentType("application/json; charset=UTF-8");
+                EnableJob job = JOBS.get(jobId);
+                if (job == null) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"Unknown jobId\"}");
+                    return;
                 }
 
-                json.append("]}");
-                writeLog("Response sent to client");
+                EnableJob.Status st = job.getStatus();
+                String statusName = st.name().toLowerCase();
+                boolean needsTotp = job.needsTotp();
+                TotpSession session = job.getTotpSession();
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("{\"success\":true")
+                  .append(",\"jobId\":\"").append(escapeJson(jobId)).append("\"")
+                  .append(",\"status\":\"").append(statusName).append("\"")
+                  .append(",\"message\":\"").append(escapeJson(job.getMessage())).append("\"")
+                  .append(",\"needsTotp\":").append(needsTotp)
+                  .append(",\"totpReason\":\"").append(escapeJson(session.getReason())).append("\"")
+                  .append(",\"totpReAsk\":").append(session.isReAsk())
+                  .append(",\"totpSecondsRemaining\":").append(session.getSecondsRemaining());
+
+                if (st == EnableJob.Status.DONE || st == EnableJob.Status.FAILED) {
+                    String results = job.getResultsJson();
+                    if (results != null && !results.isEmpty()) {
+                        // Full enable result object: {appServer, results:[...]}
+                        sb.append(",\"payload\":").append(results);
+                    }
+                }
+                sb.append("}");
+                response.getWriter().write(sb.toString());
+                return;
+            }
+
+            if ("submitTotp".equals(action)) {
+                String jobId = request.getParameter("jobId") != null
+                        ? request.getParameter("jobId").trim() : "";
+                String totp = request.getParameter("totp") != null
+                        ? request.getParameter("totp").trim() : "";
                 response.setContentType("application/json; charset=UTF-8");
-                response.getWriter().write(json.toString());
+                EnableJob job = JOBS.get(jobId);
+                if (job == null) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"Unknown jobId\"}");
+                    return;
+                }
+                String err = job.submitTotp(totp);
+                if (err != null) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"" + escapeJson(err) + "\"}");
+                } else {
+                    writeLog("TOTP submitted for job " + jobId);
+                    response.getWriter().write("{\"success\":true}");
+                }
+                return;
+            }
+
+            if ("cancelJob".equals(action)) {
+                String jobId = request.getParameter("jobId") != null
+                        ? request.getParameter("jobId").trim() : "";
+                response.setContentType("application/json; charset=UTF-8");
+                EnableJob job = JOBS.get(jobId);
+                if (job == null) {
+                    response.getWriter().write("{\"success\":false,\"message\":\"Unknown jobId\"}");
+                    return;
+                }
+                job.cancel("Cancelled by user");
+                writeLog("Job " + jobId + " cancelled by user");
+                response.getWriter().write("{\"success\":true}");
+                return;
             }
 
             // ─── Admin: Login ───────────────────────────────────────────

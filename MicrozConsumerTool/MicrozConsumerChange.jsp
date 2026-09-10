@@ -26,6 +26,42 @@
             </button>
         </header>
 
+        <!-- TOTP Modal (shared SSH auth) -->
+        <div class="modal-overlay" id="totpModal">
+            <div class="modal-card">
+                <div class="modal-logo">
+                    <div class="modal-logo-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2L4 5.5V11.5C4 16.2 7.4 20.6 12 22C16.6 20.6 20 16.2 20 11.5V5.5L12 2Z" fill="url(#totpShieldGrad)" stroke="url(#totpShieldStroke)" stroke-width="1"/>
+                            <circle cx="12" cy="11" r="3.2" stroke="#fff" stroke-width="1.6" fill="none"/>
+                            <defs>
+                                <linearGradient id="totpShieldGrad" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#0a84ff"/>
+                                    <stop offset="1" stop-color="#5e5ce6"/>
+                                </linearGradient>
+                                <linearGradient id="totpShieldStroke" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#3a9fff"/>
+                                    <stop offset="1" stop-color="#7d7aff"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <h3 id="totpModalTitle">SSH TOTP Required</h3>
+                    <p class="modal-subtitle" id="totpModalReason">Enter your authenticator code to continue.</p>
+                </div>
+                <div class="modal-field">
+                    <label class="modal-label" for="totpModalInput">TOTP Code</label>
+                    <input type="text" id="totpModalInput" class="modal-input totp-modal-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="one-time-code" placeholder="6-digit code" />
+                </div>
+                <div id="totpCountdown" class="totp-countdown" style="display:none;"></div>
+                <div id="totpModalError" class="modal-error"></div>
+                <div class="modal-actions">
+                    <button class="modal-btn secondary" id="totpCancelBtn" type="button">Cancel</button>
+                    <button class="modal-btn primary" id="totpSubmitBtn" type="button">Submit</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Login Modal -->
         <div class="modal-overlay" id="loginModal">
             <div class="modal-card">
@@ -103,11 +139,6 @@
         <main class="config-grid">
             <section class="panel form-panel">
                 <h2>Consumer Configuration</h2>
-                <div class="formInput totp-field">
-                    <label class="formLabel" for="totpCode">TOTP Code</label>
-                    <input type="text" id="totpCode" class="totp-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="one-time-code" placeholder="Enter 6-digit code" />
-                    <div class="tip">Required for every enable operation. Enter your current authenticator code.</div>
-                </div>
                 <div class="formContainer microz-form" id="formData"></div>
             </section>
             <section class="panel result-panel">

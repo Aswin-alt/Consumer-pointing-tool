@@ -242,40 +242,21 @@ body::after {
 
 .microz-form select { width: 100%; }
 
-.totp-field {
-  margin-bottom: 24px;
-  padding-bottom: 4px;
-}
-.totp-field .formLabel {
-  display: block;
-  margin-bottom: 10px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-}
-.totp-input {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  font-family: var(--font-sans);
+.totp-modal-input {
+  letter-spacing: 0.2em;
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.2em;
   text-align: center;
-  background: rgba(255,255,255,.85);
+}
+.totp-countdown {
+  margin: 4px 0 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.totp-countdown strong {
   color: var(--ink);
-}
-.totp-input:focus {
-  outline: none;
-  border-color: var(--accent-from);
-  box-shadow: 0 0 0 3px rgba(10,132,255,.15);
-}
-.totp-field .tip {
-  margin-top: 10px;
-  margin-bottom: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .tip {

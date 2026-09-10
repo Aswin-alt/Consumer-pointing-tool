@@ -71,7 +71,6 @@ function renderResult(data) {
 function enableConsumer() {
 	var appServerName = $("#AppServerName").val();
 	var consumerNames = $("#ConsumerName").val() || [];
-	var totpCode = ($("#totpCode").val() || "").trim();
 	var $btn = $("#enableBtn");
 
 	if (!appServerName) {
@@ -84,13 +83,8 @@ function enableConsumer() {
 		return;
 	}
 
-	if (!/^\d{6,8}$/.test(totpCode)) {
-		$("#responseContainer").html("<div class='toast fail'>Please enter a valid TOTP code (6–8 digits).</div>");
-		$("#totpCode").focus();
-		return;
-	}
-
 	$btn.prop("disabled", true).html("<span class='spinner'></span>Enabling...");
+	$("#responseContainer").html("<div class='toast'>Starting enable job...</div>");
 
 	$.ajax({
 		url: "MicrozConsumerChange",
@@ -98,27 +92,205 @@ function enableConsumer() {
 		traditional: true,
 		dataType: "json",
 		data: {
-			action: "enableConsumer",
+			action: "startEnable",
 			AppServerName: appServerName,
-			ConsumerName: consumerNames,
-			totp: totpCode
+			ConsumerName: consumerNames
 		},
-		success: function(responseJson) {
-			renderResult(responseJson);
+		success: function(resp) {
+			if (!resp || !resp.success || !resp.jobId) {
+				$("#responseContainer").html("<div class='toast fail'>" + escapeHtml((resp && resp.message) || "Failed to start job") + "</div>");
+				$btn.prop("disabled", false).text("Enable Consumers");
+				return;
+			}
+			pollEnableJob(resp.jobId, $btn);
 		},
 		error: function(xhr) {
-			var msg = "Unexpected error while enabling consumers.";
+			var msg = "Unexpected error while starting enable job.";
 			if (xhr && xhr.responseText) {
 				msg = xhr.responseText;
 			}
 			$("#responseContainer").html("<div class='toast fail'>" + escapeHtml(msg) + "</div>");
-		},
-		complete: function() {
 			$btn.prop("disabled", false).text("Enable Consumers");
-			$("#totpCode").val("");
 		}
 	});
 }
+
+var _enablePollTimer = null;
+var _totpCountdownTimer = null;
+var _activeJobId = null;
+var _totpModalVisible = false;
+
+function stopEnablePolling() {
+	if (_enablePollTimer) {
+		clearInterval(_enablePollTimer);
+		_enablePollTimer = null;
+	}
+}
+
+function stopTotpCountdown() {
+	if (_totpCountdownTimer) {
+		clearInterval(_totpCountdownTimer);
+		_totpCountdownTimer = null;
+	}
+}
+
+function hideTotpModal() {
+	$("#totpModal").removeClass("visible");
+	$("#totpModalInput").val("");
+	$("#totpModalError").text("");
+	$("#totpCountdown").hide().text("");
+	stopTotpCountdown();
+	_totpModalVisible = false;
+}
+
+function showTotpModal(reason, secondsRemaining, isReAsk) {
+	$("#totpModalReason").text(reason || "Enter your authenticator code to continue.");
+	$("#totpModalTitle").text(isReAsk ? "TOTP Re-entry Required" : "SSH TOTP Required");
+	$("#totpModalError").text("");
+	$("#totpModal").addClass("visible");
+	if (!_totpModalVisible) {
+		$("#totpModalInput").val("").focus();
+	}
+	_totpModalVisible = true;
+
+	stopTotpCountdown();
+	var secs = typeof secondsRemaining === "number" ? secondsRemaining : 60;
+	function paintCountdown(s) {
+		$("#totpCountdown")
+			.show()
+			.html("Time remaining: <strong>" + s + "s</strong>");
+	}
+	paintCountdown(secs);
+	_totpCountdownTimer = setInterval(function() {
+		secs -= 1;
+		if (secs <= 0) {
+			paintCountdown(0);
+			stopTotpCountdown();
+			return;
+		}
+		paintCountdown(secs);
+	}, 1000);
+}
+
+function finishEnableJob($btn, statusData) {
+	stopEnablePolling();
+	hideTotpModal();
+	_activeJobId = null;
+	$btn.prop("disabled", false).text("Enable Consumers");
+
+	if (statusData && statusData.payload) {
+		renderResult(statusData.payload);
+		return;
+	}
+
+	var msg = (statusData && statusData.message) || "Enable job failed.";
+	$("#responseContainer").html("<div class='toast fail'>" + escapeHtml(msg) + "</div>");
+}
+
+function pollEnableJob(jobId, $btn) {
+	_activeJobId = jobId;
+	stopEnablePolling();
+
+	function tick() {
+		$.ajax({
+			url: "MicrozConsumerChange",
+			dataType: "json",
+			data: { action: "jobStatus", jobId: jobId },
+			success: function(st) {
+				if (!st || !st.success) {
+					finishEnableJob($btn, { message: (st && st.message) || "Lost job status" });
+					return;
+				}
+
+				if (st.status === "done") {
+					finishEnableJob($btn, st);
+					return;
+				}
+
+				if (st.status === "failed") {
+					finishEnableJob($btn, st);
+					return;
+				}
+
+				if (st.needsTotp) {
+					showTotpModal(st.totpReason, st.totpSecondsRemaining, !!st.totpReAsk);
+					$("#responseContainer").html("<div class='toast'>Waiting for TOTP...</div>");
+				} else {
+					if (_totpModalVisible) {
+						hideTotpModal();
+					}
+					$("#responseContainer").html("<div class='toast'>Running SSH enable on hosts...</div>");
+				}
+			},
+			error: function() {
+				finishEnableJob($btn, { message: "Failed to poll job status" });
+			}
+		});
+	}
+
+	tick();
+	_enablePollTimer = setInterval(tick, 1000);
+}
+
+$(document).on("click", "#totpSubmitBtn", function() {
+	var code = ($("#totpModalInput").val() || "").trim();
+	$("#totpModalError").text("");
+	if (!/^\d{6,8}$/.test(code)) {
+		$("#totpModalError").text("Enter a valid 6–8 digit TOTP.");
+		return;
+	}
+	if (!_activeJobId) {
+		$("#totpModalError").text("No active job.");
+		return;
+	}
+
+	var $submit = $("#totpSubmitBtn").prop("disabled", true).text("Submitting...");
+	$.ajax({
+		url: "MicrozConsumerChange",
+		type: "POST",
+		dataType: "json",
+		data: { action: "submitTotp", jobId: _activeJobId, totp: code },
+		success: function(r) {
+			if (r && r.success) {
+				$("#totpModalInput").val("");
+				$("#totpModalError").text("");
+				// Keep modal until status clears needsTotp; countdown stops on next poll
+			} else {
+				$("#totpModalError").text((r && r.message) || "Failed to submit TOTP");
+			}
+		},
+		error: function() {
+			$("#totpModalError").text("Connection error while submitting TOTP");
+		},
+		complete: function() {
+			$submit.prop("disabled", false).text("Submit");
+		}
+	});
+});
+
+$(document).on("keydown", "#totpModalInput", function(e) {
+	if (e.which === 13) {
+		$("#totpSubmitBtn").click();
+	}
+});
+
+$(document).on("click", "#totpCancelBtn", function() {
+	if (!_activeJobId) {
+		hideTotpModal();
+		return;
+	}
+	var jobId = _activeJobId;
+	var $btn = $("#enableBtn");
+	$.ajax({
+		url: "MicrozConsumerChange",
+		type: "POST",
+		dataType: "json",
+		data: { action: "cancelJob", jobId: jobId },
+		complete: function() {
+			finishEnableJob($btn, { message: "Cancelled by user" });
+		}
+	});
+});
 
 /* ═══════════════════════════════════════════════════════════════════════
    Admin Panel Logic
